@@ -21,6 +21,7 @@ from curl_cffi import requests as cffi_requests
 import yt_dlp
 
 from config import (
+    BASE_DIR,
     DOWNLOAD_DIR,
     MAX_FILE_SIZE_BYTES,
     MAX_FILE_SIZE_MB,
@@ -35,14 +36,30 @@ from config import (
 
 logger = logging.getLogger("Downloader")
 
-# كشف محرك جافاسكريبت خارجي (Node.js أو Deno) لحل شفرات وتحديات يوتيوب وتجاوز الحظر السحابي
+# كشف محرك جافاسكريبت خارجي (Node.js أو Deno أو Bun) لحل شفرات وتحديات يوتيوب وتجاوز الحظر السحابي
 JS_RUNTIME_TYPE: Optional[str] = None
-if shutil.which("node"):
-    JS_RUNTIME_TYPE = "node"
-    logger.info(f"تم اكتشاف محرك Node.js لدعم شفرات يوتيوب: {shutil.which('node')}")
-elif shutil.which("deno"):
-    JS_RUNTIME_TYPE = "deno"
-    logger.info(f"تم اكتشاف محرك Deno لدعم شفرات يوتيوب: {shutil.which('deno')}")
+JS_RUNTIME_PATH: Optional[str] = None
+
+for _rt_name in ["node", "nodejs", "deno", "bun"]:
+    _which_path = shutil.which(_rt_name)
+    if _which_path:
+        JS_RUNTIME_TYPE = "node" if "node" in _rt_name else _rt_name
+        JS_RUNTIME_PATH = _which_path
+        logger.info(f"تم اكتشاف محرك جافاسكريبت ({JS_RUNTIME_TYPE}) لدعم شفرات يوتيوب: {_which_path}")
+        break
+
+if not JS_RUNTIME_TYPE:
+    for _rt_name, _candidate in [
+        ("node", Path(r"C:\Program Files\nodejs\node.exe")),
+        ("node", Path("/usr/bin/node")),
+        ("node", Path("/usr/local/bin/node")),
+    ]:
+        if _candidate.is_file():
+            JS_RUNTIME_TYPE = _rt_name
+            JS_RUNTIME_PATH = str(_candidate)
+            logger.info(f"تم العثور على محرك جافاسكريبت في المسار المباشر: {_candidate}")
+            break
+
 
 
 # ==========================================
@@ -339,11 +356,10 @@ class MediaDownloader:
     @staticmethod
     def _get_extractor_args(use_syndication: bool = True, youtube_clients: Optional[List[str]] = None) -> Dict[str, Any]:
         """إعدادات مستخرجات المنصات لتجاوز الحظر وحماية الطلبات."""
-        clients = youtube_clients or ["android", "web"]
+        clients = youtube_clients or ["ios", "android", "web"]
         args: Dict[str, Any] = {
             "youtube": {
                 "player_client": clients,
-                "player_skip": ["webpage", "configs"],
             },
             "tiktok": {
                 "app_version": "34.1.2",
@@ -364,6 +380,7 @@ class MediaDownloader:
         use_syndication: bool = True,
         is_tiktok: bool = False,
         youtube_clients: Optional[List[str]] = None,
+        use_cookies: bool = True,
     ) -> Dict[str, Any]:
         """بناء إعدادات yt-dlp عالية الأداء والتسريع."""
         output_template = str(temp_dir / "%(id)s.%(ext)s")
@@ -412,20 +429,27 @@ class MediaDownloader:
             "socket_timeout": 20,
             "retries": 5,
             "fragment_retries": 5,
+            "remote_components": {"ejs:github"},
             "extractor_args": cls._get_extractor_args(use_syndication=use_syndication, youtube_clients=youtube_clients),
         }
 
         if JS_RUNTIME_TYPE:
-            opts["js_runtimes"] = {JS_RUNTIME_TYPE: {}}
+            opts["js_runtimes"] = {JS_RUNTIME_TYPE: {"path": JS_RUNTIME_PATH} if JS_RUNTIME_PATH else {}}
 
         if FFMPEG_PATH:
             opts["ffmpeg_location"] = FFMPEG_PATH
 
-        # التحقق الديناميكي الفعلي من وجود ملف الكوكيز لتفادي أي انهيار في حال غيابه
-        cookie_candidate = COOKIES_FILE or COOKIES_PATH
-        if cookie_candidate and Path(cookie_candidate).is_file():
-            opts["cookiefile"] = str(cookie_candidate)
-            logger.info(f"تم تفعيل ملف الكوكيز: {cookie_candidate}")
+        # قراءة ملف cookies.txt الموجود في مسار المشروع وتمريره مباشرة إلى cookiefile في خيارات YoutubeDL
+        if use_cookies:
+            cookie_candidate = None
+            for p in [COOKIES_FILE, COOKIES_PATH, BASE_DIR / "cookies.txt", Path("cookies.txt")]:
+                if p and Path(p).is_file() and Path(p).stat().st_size > 0:
+                    cookie_candidate = Path(p).resolve()
+                    break
+
+            if cookie_candidate:
+                opts["cookiefile"] = str(cookie_candidate)
+                logger.info(f"تم تفعيل وتمرير ملف الكوكيز مباشرة إلى خيارات YoutubeDL: {cookie_candidate}")
 
         return opts
 
@@ -947,11 +971,30 @@ class MediaDownloader:
             clean_yt_url = f"https://www.youtube.com/watch?v={yt_id_m.group(1)}" if yt_id_m else url
 
             youtube_strategies = [
-                {"client": ["android"], "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/best"},
-                {"client": ["android"], "format": "18/best"},
-                {"client": ["android_vr"], "format": "best[ext=mp4]/best"},
-                {"client": ["ios"], "format": "best[ext=mp4]/best"},
-                {"client": ["web"], "format": "best[ext=mp4]/best"},
+                {
+                    "name": "ios_android_web_cookies",
+                    "clients": ["ios", "android", "web"],
+                    "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bestvideo+bestaudio/best",
+                    "use_cookies": True,
+                },
+                {
+                    "name": "ios_android_web_safari_cookies",
+                    "clients": ["ios", "android", "web_safari", "web"],
+                    "format": "best[ext=mp4]/best",
+                    "use_cookies": True,
+                },
+                {
+                    "name": "android_fallback_no_cookies",
+                    "clients": ["android", "ios", "web"],
+                    "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/18/best",
+                    "use_cookies": False,
+                },
+                {
+                    "name": "android_vr_fallback_no_cookies",
+                    "clients": ["android_vr"],
+                    "format": "best[ext=mp4]/best",
+                    "use_cookies": False,
+                },
             ]
             last_yt_err = None
             for s in youtube_strategies:
@@ -961,16 +1004,18 @@ class MediaDownloader:
                     download_thumbnail=True,
                     use_syndication=False,
                     is_tiktok=False,
-                    youtube_clients=s["client"],
+                    youtube_clients=s["clients"],
+                    use_cookies=s["use_cookies"],
                 )
                 try:
                     with yt_dlp.YoutubeDL(opts) as ydl_yt:
                         info = ydl_yt.extract_info(clean_yt_url, download=True)
                     if info:
+                        logger.info(f"نجح استخراج وتنزيل يوتيوب عبر استراتيجية {s['name']}")
                         break
                 except Exception as ex:
                     last_yt_err = ex
-                    logger.warning(f"فشلت استراتيجية يوتيوب {s['client']} ({ex})، تجربة البديل التالي...")
+                    logger.warning(f"فشلت استراتيجية يوتيوب {s['name']} ({ex})، تجربة البديل التالي...")
             if not info and last_yt_err:
                 self._handle_download_error(last_yt_err)
 

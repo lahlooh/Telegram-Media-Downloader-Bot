@@ -416,6 +416,31 @@ class TestBotComponents(unittest.TestCase):
         self.assertGreater(vm.total, 0)
         self.assertGreaterEqual(vm.percent, 0.0)
 
+    def test_youtube_options_and_cookies(self):
+        """فحص إعدادات يوتيوب وتمرير ملف cookies.txt وقائمة player_client بالترتيب المطلوب."""
+        downloader = MediaDownloader()
+        opts = downloader._build_ydl_options(
+            DOWNLOAD_DIR,
+            "best",
+            download_thumbnail=True,
+            use_syndication=False,
+            is_tiktok=False,
+        )
+        self.assertIn("extractor_args", opts)
+        self.assertIn("youtube", opts["extractor_args"])
+        self.assertEqual(
+            opts["extractor_args"]["youtube"]["player_client"],
+            ["ios", "android", "web"]
+        )
+        self.assertIn("remote_components", opts)
+        self.assertIn("ejs:github", opts["remote_components"])
+
+        # فحص تمرير الكوكيز مباشرة إلى خيارات YoutubeDL عند وجود الملف
+        cookies_file = Path(__file__).resolve().parent / "cookies.txt"
+        if cookies_file.is_file() and cookies_file.stat().st_size > 0:
+            self.assertIn("cookiefile", opts)
+            self.assertEqual(Path(opts["cookiefile"]).resolve(), cookies_file.resolve())
+
 
 if __name__ == "__main__":
     unittest.main()

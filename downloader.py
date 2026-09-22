@@ -338,7 +338,7 @@ class MediaDownloader:
     @staticmethod
     def _get_extractor_args(use_syndication: bool = True, youtube_clients: Optional[List[str]] = None) -> Dict[str, Any]:
         """إعدادات مستخرجات المنصات لتجاوز الحظر وحماية الطلبات."""
-        clients = youtube_clients or ["android", "ios", "mweb", "web"]
+        clients = youtube_clients or ["android"]
         args: Dict[str, Any] = {
             "youtube": {
                 "player_client": clients,
@@ -461,7 +461,7 @@ class MediaDownloader:
             raise InvalidURLError("⚠️ الرابط المرسل غير مدعوم أو غير صحيح.") from e
         elif any(code in error_msg for code in ["10054", "connection reset", "forcibly closed"]):
             raise DownloaderError("⚠️ انقطع الاتصال بخادم المنصة بشكل مفاجئ. يرجى المحاولة مرة أخرى.") from e
-        elif any(term in error_msg for term in ["429", "too many requests", "sign in to confirm", "bot"]):
+        elif any(term in error_msg for term in ["429", "too many requests", "not a bot", "not a robot", "sign in to confirm"]):
             raise DownloaderError("⚠️ خوادم المنصة تفرض قيوداً مؤقتة أو تطلب التحقق (Rate Limit). يرجى المحاولة بعد قليل.") from e
         elif any(term in error_msg for term in ["errno 22", "invalid argument"]):
             raise DownloaderError("⚠️ تعذر حفظ المقطع بسبب قيود نظام الملفات. يرجى إعادة المحاولة.") from e
@@ -923,81 +923,95 @@ class MediaDownloader:
             except Exception as e_tt:
                 logger.warning(f"تعذر التنزيل عبر محرك تيك توك المباشر ({e_tt})، جاري المحاولة البديلة عبر yt-dlp...")
 
-        # 2. التنزيل عبر yt-dlp (للمنصات الأخرى أو كبديل)
-        is_twitter = any(dom in url.lower() for dom in ["x.com", "twitter.com"])
+        # 2. إذا كان يوتيوب، نستخدم استراتيجيات متسلسلة عالية الدقة لتجاوز حظر الخوادم السحابية
         is_youtube = any(dom in url.lower() for dom in ["youtube.com", "youtu.be"])
-        best_format = "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b/best"
-        ydl_opts = self._build_ydl_options(
-            temp_dir=temp_dir,
-            format_selector=best_format,
-            download_thumbnail=True,
-            use_syndication=True,
-            is_tiktok=is_tiktok,
-        )
-
         info: Optional[Dict[str, Any]] = None
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-        except Exception as e:
-            logger.exception(f"فشلت المحاولة بالجودة القصوى (Full Traceback): {e}")
+        if is_youtube:
+            yt_id_m = re.search(r'(?:v=|youtu\.be/|shorts/)([a-zA-Z0-9_-]{11})', url)
+            clean_yt_url = f"https://www.youtube.com/watch?v={yt_id_m.group(1)}" if yt_id_m else url
 
-            # محاولة بديلة لتويتر إذا فشلت واجهة syndication
-            if is_twitter:
-                logger.warning("جاري إعادة محاولة التنزيل لتويتر بدون syndication...")
-                fallback_opts = self._build_ydl_options(
+            youtube_strategies = [
+                {"client": ["android"], "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/best"},
+                {"client": ["android"], "format": "18/best"},
+                {"client": ["android_vr"], "format": "best[ext=mp4]/best"},
+                {"client": ["ios"], "format": "best[ext=mp4]/best"},
+                {"client": ["web"], "format": "best[ext=mp4]/best"},
+            ]
+            last_yt_err = None
+            for s in youtube_strategies:
+                opts = self._build_ydl_options(
                     temp_dir=temp_dir,
-                    format_selector="best",
+                    format_selector=s["format"],
                     download_thumbnail=True,
                     use_syndication=False,
                     is_tiktok=False,
+                    youtube_clients=s["client"],
                 )
                 try:
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
-                        info = ydl_fb.extract_info(url, download=True)
-                except Exception as fb_err:
-                    logger.exception(f"فشلت محاولة تويتر البديلة: {fb_err}")
-                    self._handle_download_error(fb_err)
-            elif is_tiktok:
-                # إذا فشل yt-dlp أيضاً على تيك توك
-                try:
-                    return self._download_tiktok_direct(url, temp_dir)
-                except Exception as final_tt_err:
-                    self._handle_download_error(final_tt_err)
-            elif is_youtube:
-                # محاولة بديلة ذكية ليوتيوب بعملاء بديلين (tv, mweb, web) لتجاوز قيود الاستضافة السحابية
-                logger.warning("جاري محاولة تنزيل يوتيوب بصيغة وعملاء بديلين لتجاوز القيود...")
-                fallback_opts = self._build_ydl_options(
-                    temp_dir=temp_dir,
-                    format_selector="best[ext=mp4]/best/b",
-                    download_thumbnail=False,
-                    use_syndication=False,
-                    is_tiktok=False,
-                    youtube_clients=["tv", "mweb", "web", "android"],
-                )
-                try:
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl_yt:
-                        info = ydl_yt.extract_info(url, download=True)
-                except Exception as yt_err:
-                    logger.exception(f"فشلت محاولة يوتيوب البديلة: {yt_err}")
-                    self._handle_download_error(yt_err)
-            else:
-                # محاولة عامة بدون غلاف وبصيغة best
-                logger.warning("جاري إعادة محاولة التنزيل بصيغة عامة...")
-                fallback_opts = self._build_ydl_options(
-                    temp_dir=temp_dir,
-                    format_selector="best/b",
-                    download_thumbnail=False,
-                    use_syndication=False,
-                    is_tiktok=False,
-                )
-                try:
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl_gen:
-                        info = ydl_gen.extract_info(url, download=True)
-                except Exception as gen_err:
-                    logger.exception(f"فشلت المحاولة العامة البديلة: {gen_err}")
-                    self._handle_download_error(gen_err)
+                    with yt_dlp.YoutubeDL(opts) as ydl_yt:
+                        info = ydl_yt.extract_info(clean_yt_url, download=True)
+                    if info:
+                        break
+                except Exception as ex:
+                    last_yt_err = ex
+                    logger.warning(f"فشلت استراتيجية يوتيوب {s['client']} ({ex})، تجربة البديل التالي...")
+            if not info and last_yt_err:
+                self._handle_download_error(last_yt_err)
+
+        # 3. التنزيل عبر yt-dlp للمنصات الأخرى (أو إذا لم يكتمل التنزيل)
+        if not info:
+            is_twitter = any(dom in url.lower() for dom in ["x.com", "twitter.com"])
+            best_format = "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b/best"
+            ydl_opts = self._build_ydl_options(
+                temp_dir=temp_dir,
+                format_selector=best_format,
+                download_thumbnail=True,
+                use_syndication=True,
+                is_tiktok=is_tiktok,
+            )
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+            except Exception as e:
+                logger.exception(f"فشلت المحاولة بالجودة القصوى (Full Traceback): {e}")
+
+                if is_twitter:
+                    logger.warning("جاري إعادة محاولة التنزيل لتويتر بدون syndication...")
+                    fallback_opts = self._build_ydl_options(
+                        temp_dir=temp_dir,
+                        format_selector="best",
+                        download_thumbnail=True,
+                        use_syndication=False,
+                        is_tiktok=False,
+                    )
+                    try:
+                        with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
+                            info = ydl_fb.extract_info(url, download=True)
+                    except Exception as fb_err:
+                        logger.exception(f"فشلت محاولة تويتر البديلة: {fb_err}")
+                        self._handle_download_error(fb_err)
+                elif is_tiktok:
+                    try:
+                        return self._download_tiktok_direct(url, temp_dir)
+                    except Exception as final_tt_err:
+                        self._handle_download_error(final_tt_err)
+                else:
+                    logger.warning("جاري إعادة محاولة التنزيل بصيغة عامة...")
+                    fallback_opts = self._build_ydl_options(
+                        temp_dir=temp_dir,
+                        format_selector="best/b",
+                        download_thumbnail=False,
+                        use_syndication=False,
+                        is_tiktok=False,
+                    )
+                    try:
+                        with yt_dlp.YoutubeDL(fallback_opts) as ydl_gen:
+                            info = ydl_gen.extract_info(url, download=True)
+                    except Exception as gen_err:
+                        logger.exception(f"فشلت المحاولة العامة البديلة: {gen_err}")
+                        self._handle_download_error(gen_err)
 
         if not info:
             raise ContentUnavailableError("تعذر العثور على أي معلومات أو بيانات للمقطع.")

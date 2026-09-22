@@ -88,8 +88,13 @@ if _cookies_content and _cookies_content.strip():
     except Exception as e_cook:
         logger.warning(f"تعذر كتابة ملف الكوكيز من متغير البيئة: {e_cook}")
 
+# التحقق الفعلي والديناميكي من ملف الكوكيز (cookies.txt) لتفادي أي انهيار في حال غيابه
 if COOKIES_PATH and not COOKIES_PATH.is_file():
     COOKIES_PATH = None
+if not COOKIES_PATH and (BASE_DIR / "cookies.txt").is_file():
+    COOKIES_PATH = BASE_DIR / "cookies.txt"
+
+COOKIES_FILE: Path | None = COOKIES_PATH
 
 # كشف وتحديد مسار FFmpeg تلقائياً
 def get_ffmpeg_path() -> str | None:
@@ -117,11 +122,11 @@ def get_ffmpeg_path() -> str | None:
 
 FFMPEG_PATH = get_ffmpeg_path()
 
-# ترويسة الطلبات (User-Agent) لتفادي الحظر واعتراض الطلبات
+# ترويسة الطلبات (User-Agent) الحديثة والمتطابقة مع المتصفحات الشائعة لتفادي الحظر
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
+    "Chrome/133.0.0.0 Safari/537.36"
 )
 
 # ترويسات HTTP إضافية لمحاكاة متصفح حقيقي
@@ -129,7 +134,7 @@ DEFAULT_HTTP_HEADERS = {
     "User-Agent": DEFAULT_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua": '"Google Chrome";v="133", "Chromium";v="133", "Not_A Brand";v="24"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "document",

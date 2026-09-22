@@ -26,6 +26,7 @@ from config import (
     MAX_FILE_SIZE_MB,
     FFMPEG_PATH,
     COOKIES_PATH,
+    COOKIES_FILE,
     DEFAULT_USER_AGENT,
     DEFAULT_HTTP_HEADERS,
     TIKTOK_MOBILE_USER_AGENT,
@@ -338,10 +339,11 @@ class MediaDownloader:
     @staticmethod
     def _get_extractor_args(use_syndication: bool = True, youtube_clients: Optional[List[str]] = None) -> Dict[str, Any]:
         """إعدادات مستخرجات المنصات لتجاوز الحظر وحماية الطلبات."""
-        clients = youtube_clients or ["android"]
+        clients = youtube_clients or ["android", "web"]
         args: Dict[str, Any] = {
             "youtube": {
                 "player_client": clients,
+                "player_skip": ["webpage", "configs"],
             },
             "tiktok": {
                 "app_version": "34.1.2",
@@ -419,9 +421,11 @@ class MediaDownloader:
         if FFMPEG_PATH:
             opts["ffmpeg_location"] = FFMPEG_PATH
 
-        if COOKIES_PATH and COOKIES_PATH.is_file():
-            opts["cookiefile"] = str(COOKIES_PATH)
-            logger.info(f"تم تفعيل ملف الكوكيز: {COOKIES_PATH}")
+        # التحقق الديناميكي الفعلي من وجود ملف الكوكيز لتفادي أي انهيار في حال غيابه
+        cookie_candidate = COOKIES_FILE or COOKIES_PATH
+        if cookie_candidate and Path(cookie_candidate).is_file():
+            opts["cookiefile"] = str(cookie_candidate)
+            logger.info(f"تم تفعيل ملف الكوكيز: {cookie_candidate}")
 
         return opts
 
@@ -447,11 +451,24 @@ class MediaDownloader:
 
     @classmethod
     def _handle_download_error(cls, e: Exception) -> None:
-        """تحليل وترجمة أخطاء yt-dlp مع تنظيفها من ANSI Codes."""
+        """تحليل وترجمة أخطاء yt-dlp مع تنظيفها من ANSI Codes وكتابة التفاصيل في الـ Logger."""
         error_msg = str(e).lower()
         cleaned = clean_error_message(str(e))
+        logger.error(f"[Download Error Details]: {cleaned} | Full Exception: {e}", exc_info=True)
 
-        if "no video could be found" in error_msg:
+        if any(term in error_msg for term in [
+            "sign in to confirm you're not a bot",
+            "sign in to confirm you’re not a bot",
+            "sign in to confirm",
+            "not a bot",
+            "not a robot",
+            "rate-limit",
+            "rate limit",
+            "429",
+            "too many requests"
+        ]):
+            raise DownloaderError("⚠️ هذا المقطع يتطلب تسجيل دخول أو تفرضه قيود أمان المنصة حالياً، جاري العمل على تحديث بيانات الاتصال.") from e
+        elif "no video could be found" in error_msg:
             raise ContentUnavailableError("⚠️ لا يوجد مقطع فيديو داخل هذا الرابط (قد يحتوي على صورة أو نص فقط).") from e
         elif any(term in error_msg for term in ["private", "login", "requires account", "members-only"]):
             raise ContentUnavailableError("🔒 هذا المقطع خاص أو يتطلب تسجيل دخول.") from e
@@ -461,8 +478,6 @@ class MediaDownloader:
             raise InvalidURLError("⚠️ الرابط المرسل غير مدعوم أو غير صحيح.") from e
         elif any(code in error_msg for code in ["10054", "connection reset", "forcibly closed"]):
             raise DownloaderError("⚠️ انقطع الاتصال بخادم المنصة بشكل مفاجئ. يرجى المحاولة مرة أخرى.") from e
-        elif any(term in error_msg for term in ["429", "too many requests", "not a bot", "not a robot", "sign in to confirm"]):
-            raise DownloaderError("⚠️ خوادم المنصة تفرض قيوداً مؤقتة أو تطلب التحقق (Rate Limit). يرجى المحاولة بعد قليل.") from e
         elif any(term in error_msg for term in ["errno 22", "invalid argument"]):
             raise DownloaderError("⚠️ تعذر حفظ المقطع بسبب قيود نظام الملفات. يرجى إعادة المحاولة.") from e
         elif any(term in error_msg for term in ["country", "region", "geo"]):

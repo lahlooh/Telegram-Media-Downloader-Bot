@@ -2,10 +2,20 @@ services:
   - type: web
     name: telegram-downloader-bot
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    plan: free
+    buildCommand: bash build.sh
     startCommand: python bot.py
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: BOT_TOKEN
         sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: MAX_FILE_SIZE_MB
+        value: 48
+      - key: PORT
+        value: 10000
+      - key: DOWNLOAD_DIR
+        value: downloads

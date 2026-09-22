@@ -1,0 +1,43 @@
+# البيئة والمتغيرات الحساسة
+.env
+.env.local
+
+# ملفات الجلسات والكوكيز
+cookies.txt
+*.cookie
+
+# مجلدات التنزيل والملفات المؤقتة وقاعدة البيانات
+downloads/
+temp/
+data/*.db
+data/*.sqlite*
+*.mp4
+*.m4a
+*.webm
+*.part
+*.ytdl
+*.jpg
+*.webp
+*.png
+
+# كاش بايثون والبيئات الافتراضية
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+
+# ملفات النظام ومحررات الأكواد
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# سجلات PM2
+logs/*
+!logs/.gitkeep
+*.log
